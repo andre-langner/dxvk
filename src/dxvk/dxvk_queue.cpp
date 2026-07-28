@@ -209,6 +209,14 @@ namespace dxvk {
           Logger::err(str::format("DxvkSubmissionQueue: Command submission failed: ", entry.result));
           m_lastError = entry.result;
 
+          // This command list will never reach the queue thread and thus never
+          // complete, so release its resources and signal its fences here.
+          // Otherwise, any thread waiting on either would block indefinitely.
+          if (entry.submit.cmdList != nullptr)
+            entry.submit.cmdList->notifyObjects();
+
+          m_finishCond.notify_all();
+
           if (m_lastError != VK_ERROR_DEVICE_LOST)
             m_device->waitForIdle();
         }
