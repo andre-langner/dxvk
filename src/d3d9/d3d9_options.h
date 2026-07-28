@@ -177,6 +177,12 @@ namespace dxvk {
     /// the device with D3DCREATE_MULTITHREADED. Useful to work around or
     /// debug race conditions in applications.
     bool enableContextLock;
+
+    /// Amount of staging memory, in MiB, that may be allocated between two
+    /// submissions before the device submits eagerly. Up to three times this
+    /// much may be in flight before the calling thread has to wait for the
+    /// GPU. Zero uses the built-in default.
+    int32_t maxStagingMemory;
   };
 
 }
