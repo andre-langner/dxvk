@@ -53,8 +53,8 @@ namespace dxvk {
     friend D3D9DeviceLock;
   public:
 
-    D3D9Multithread(BOOL Protected)
-    : m_protected(Protected) { }
+    D3D9Multithread(BOOL Protected, BOOL Force)
+    : m_protected(Protected || Force) { }
 
     /**
      * \brief Acquires lock

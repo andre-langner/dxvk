@@ -52,7 +52,7 @@ namespace dxvk {
     , m_shaderModules      ( new D3D9ShaderModuleSet )
     , m_stagingBuffer      ( dxvkDevice, StagingBufferSize )
     , m_stagingBufferFence ( new sync::Fence() )
-    , m_multithread        ( BehaviorFlags & D3DCREATE_MULTITHREADED )
+    , m_multithread        ( BehaviorFlags & D3DCREATE_MULTITHREADED, m_d3d9Options.enableContextLock )
     , m_isSWVP             ( (BehaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) != 0 )
     , m_csThread           ( dxvkDevice, dxvkDevice->createContext() )
     , m_csChunk            ( AllocCsChunk() )
@@ -65,6 +65,11 @@ namespace dxvk {
     , m_d3dCompatibility   ( pParent->GetD3DCompatibilityFlags() ) {
 
     InitShaderOptions();
+
+    if (BehaviorFlags & D3DCREATE_MULTITHREADED)
+      Logger::info("D3D9DeviceEx: Device created with D3DCREATE_MULTITHREADED.");
+    else if (m_d3d9Options.enableContextLock)
+      Logger::info("D3D9DeviceEx: Force-enabling the device lock.");
 
     // If we can SWVP, then we use an extended constant set
     // as SWVP has many more slots available than HWVP.
