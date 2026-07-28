@@ -93,6 +93,10 @@ namespace dxvk {
     Ok = 0,
     Lost = 1,
     NotReset = 2,
+    // The Vulkan device was lost. Unlike the other states, this one is
+    // terminal: we cannot recreate the Vulkan device, so Reset will
+    // never succeed again.
+    Removed = 3,
   };
 
   struct D3D9DrawInfo {
@@ -1139,6 +1143,17 @@ namespace dxvk {
     bool IsDeviceLost() const {
       return m_deviceLostState != D3D9DeviceLostState::Ok;
     }
+
+    /**
+     * \brief Checks whether the Vulkan device was lost
+     *
+     * Latches Vulkan device loss into the D3D9 device lost state. Since we
+     * cannot recreate the Vulkan device, this state is never recoverable.
+     * Must be called with the device lock held.
+     * \returns D3D_OK if the device is still usable, or the appropriate
+     *    error code for a removed device otherwise.
+     */
+    HRESULT CheckDeviceRemoved();
 
     void NotifyFullscreen(HWND window, bool fullscreen);
     void NotifyWindowActivated(HWND window, bool activated);

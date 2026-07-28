@@ -220,8 +220,29 @@ namespace dxvk {
   }
 
 
+  HRESULT D3D9DeviceEx::CheckDeviceRemoved() {
+    if (likely(m_deviceLostState != D3D9DeviceLostState::Removed)) {
+      if (likely(m_dxvkDevice->getDeviceStatus() == VK_SUCCESS))
+        return D3D_OK;
+
+      Logger::warn("D3D9DeviceEx: Vulkan device lost, D3D9 device removed");
+      m_deviceLostState = D3D9DeviceLostState::Removed;
+    }
+
+    // We cannot recreate the Vulkan device, so this is not recoverable
+    return m_d3dCompatibility.test(D3DCompatibility::D3D9Ex)
+      ? D3DERR_DEVICEREMOVED
+      : D3DERR_DEVICELOST;
+  }
+
+
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::TestCooperativeLevel() {
     D3D9DeviceLock lock = LockDevice();
+
+    HRESULT hr = CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
 
     // Equivelant of D3D11/DXGI present tests. We can always present.
     if (likely(m_deviceLostState == D3D9DeviceLostState::Ok)) {
@@ -448,10 +469,16 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::Reset(D3DPRESENT_PARAMETERS* pPresentationParameters) {
     D3D9DeviceLock lock = LockDevice();
 
+    // A Vulkan device loss is not recoverable, so this device
+    // can never be reset again.
+    HRESULT hr = CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
+
     Logger::info("Device reset");
     m_deviceLostState = D3D9DeviceLostState::Ok;
 
-    HRESULT hr;
     // Black Desert creates a D3DDEVTYPE_NULLREF device and
     // expects reset to work despite passing invalid parameters.
     if (likely(m_deviceType != D3DDEVTYPE_NULLREF)) {
@@ -4225,6 +4252,13 @@ namespace dxvk {
 
 
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::CheckDeviceState(HWND hDestinationWindow) {
+    D3D9DeviceLock lock = LockDevice();
+
+    HRESULT hr = CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
+
     static bool s_errorShown = false;
 
     if (!std::exchange(s_errorShown, true))
@@ -4487,7 +4521,13 @@ namespace dxvk {
           D3DDISPLAYMODEEX*      pFullscreenDisplayMode) {
     D3D9DeviceLock lock = LockDevice();
 
-    HRESULT hr;
+    // A Vulkan device loss is not recoverable, so this device
+    // can never be reset again.
+    HRESULT hr = CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
+
     if (likely(m_deviceType != D3DDEVTYPE_NULLREF)) {
       hr = m_parent->ValidatePresentationParametersEx(pPresentationParameters, pFullscreenDisplayMode);
 
@@ -9107,6 +9147,10 @@ namespace dxvk {
     D3D9DeviceLock lock = LockDevice();
 
     if (likely(!m_d3d9Options.deviceLossOnFocusLoss || m_d3dCompatibility.test(D3DCompatibility::D3D9Ex)))
+      return;
+
+    // Never downgrade an unrecoverable device loss to a recoverable one
+    if (unlikely(m_deviceLostState == D3D9DeviceLostState::Removed))
       return;
 
     if (activated && m_deviceLostState == D3D9DeviceLostState::Lost) {
