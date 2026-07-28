@@ -131,6 +131,13 @@ namespace dxvk {
 
     bool flush = dwGetDataFlags & D3DGETDATA_FLUSH;
 
+    // Games commonly spin on GetData until it stops returning S_FALSE. The
+    // query will never complete on a removed device, so report that instead.
+    HRESULT hr = m_parent->CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
+
     if (unlikely(m_parent->IsDeviceLost())) {
       return flush ? D3DERR_DEVICELOST : S_FALSE;
     }
@@ -149,7 +156,7 @@ namespace dxvk {
       return D3D_OK;
     }
 
-    HRESULT hr = this->GetQueryData(pData, dwSize);
+    hr = this->GetQueryData(pData, dwSize);
 
     // If we get S_FALSE and it's not from the fact
     // they didn't call end, do some flushy stuff...

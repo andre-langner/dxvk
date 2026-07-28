@@ -114,6 +114,11 @@ namespace dxvk {
 
     m_parent->SetMostRecentlyUsedSwapchain(this);
 
+    HRESULT hr = m_parent->CheckDeviceRemoved();
+
+    if (unlikely(FAILED(hr)))
+      return hr;
+
     if (unlikely(m_parent->IsDeviceLost()))
       return D3DERR_DEVICELOST;
 
@@ -190,7 +195,9 @@ namespace dxvk {
       UpdateWindowedRefreshRate();
       UpdateTargetFrameRate(presentInterval);
       PresentImage(presentInterval);
-      return D3D_OK;
+      // Report device loss that happened during this present right away,
+      // rather than silently doing nothing until the next one.
+      return m_parent->CheckDeviceRemoved();
     } catch (const DxvkError& e) {
       Logger::err(e.message());
 #ifdef _WIN32
@@ -1140,6 +1147,11 @@ namespace dxvk {
 
 
   void D3D9SwapChainEx::SyncFrameLatency() {
+    // The frame latency signal is only ever signaled by the submission queue,
+    // which stops making progress after device loss, so don't wait on it.
+    if (unlikely(m_device->getDeviceStatus() != VK_SUCCESS))
+      return;
+
     // Wait for the sync event so that we respect the maximum frame latency
     m_wctx->frameLatencySignal->wait(m_wctx->frameId - GetActualFrameLatency());
   }
