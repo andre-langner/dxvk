@@ -78,6 +78,7 @@ namespace dxvk {
     this->reproducibleCommandStream     = config.getOption<bool>        ("d3d9.reproducibleCommandStream",     false);
     this->extraFrontbuffer              = config.getOption<bool>        ("d3d9.extraFrontbuffer",              false);
     this->enableContextLock             = config.getOption<bool>        ("d3d9.enableContextLock",             false);
+    this->maxStagingMemory              = config.getOption<int32_t>     ("d3d9.maxStagingMemory",              0);
 
     // D3D8 options
     this->drefScaling = config.getOption<int32_t>("d3d8.scaleDref", 0);
