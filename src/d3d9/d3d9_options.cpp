@@ -91,6 +91,7 @@ namespace dxvk {
                   && (adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV)
                    || adapter->matchesDriver(VK_DRIVER_ID_MESA_NVK)
                    || adapter->matchesDriver(VK_DRIVER_ID_AMD_OPEN_SOURCE, Version(2, 0, 316), Version())
+                   || adapter->matchesDriver(VK_DRIVER_ID_AMD_PROPRIETARY, Version(2, 0, 316), Version())
                    || adapter->matchesDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, Version(565, 57, 1), Version()));
     std::string floatEmulation = Config::toLower(config.getOption<std::string>("d3d9.floatEmulation", "auto"));
     if (floatEmulation == "strict") {
