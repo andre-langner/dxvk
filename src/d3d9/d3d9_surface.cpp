@@ -232,10 +232,24 @@ namespace dxvk {
     createInfo.hBitmap     = nullptr;
     createInfo.hDc         = nullptr;
 
-    if (D3DKMTCreateDCFromMemory(&createInfo))
-      Logger::err("D3D9: Failed to create GDI DC");
+    if (unlikely(!createInfo.hDeviceDc)) {
+      Logger::err("D3D9: Failed to create GDI device DC");
+      UnlockRect();
+      return D3DERR_INVALIDCALL;
+    }
+
+    const bool failed = D3DKMTCreateDCFromMemory(&createInfo);
 
     DeleteDC(createInfo.hDeviceDc);
+
+    // Do not report success with a null DC, and make sure to release the
+    // lock that LockRect took above. ReleaseDC would not do it for us since
+    // it bails out before UnlockRect when m_hdc is null.
+    if (unlikely(failed || !createInfo.hDc)) {
+      Logger::err("D3D9: Failed to create GDI DC");
+      UnlockRect();
+      return D3DERR_INVALIDCALL;
+    }
 
     // These should now be set...
     m_hdc     = createInfo.hDc;
@@ -253,6 +267,11 @@ namespace dxvk {
     desc.hDc     = m_hdc;
     desc.hBitmap = m_hbitmap;
     D3DKMTDestroyDCFromMemory(&desc);
+
+    // Clear these so that a second ReleaseDC call with the same (now stale)
+    // handle gets rejected instead of destroying the same DC twice.
+    m_hdc     = nullptr;
+    m_hbitmap = nullptr;
 
     HRESULT hr = UnlockRect();
     if (FAILED(hr))
