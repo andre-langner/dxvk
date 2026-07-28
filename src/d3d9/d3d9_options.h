@@ -172,6 +172,11 @@ namespace dxvk {
 
     /// Add an extra front buffer to make GetFrontBufferData() work correctly when the swapchain only has a single buffer
     bool extraFrontbuffer;
+
+    /// Force-enable the device lock even if the application did not create
+    /// the device with D3DCREATE_MULTITHREADED. Useful to work around or
+    /// debug race conditions in applications.
+    bool enableContextLock;
   };
 
 }
