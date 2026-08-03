@@ -92,6 +92,10 @@ namespace dxvk {
     /// Enable descriptor update templates
     bool enableDescriptorUpdateTemplates = env::is32BitHostPlatform();
 
+    /// How long a single semaphore wait may block before it is
+    /// retried, in milliseconds. Zero waits indefinitely instead.
+    int32_t semaphorePollInterval = 200;
+
     /// Device name
     std::string deviceFilter;
   };
