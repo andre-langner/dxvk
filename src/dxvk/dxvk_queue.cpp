@@ -1,12 +1,44 @@
+#include <cstdlib>
+
 #include "dxvk_device.h"
 #include "dxvk_queue.h"
 
 namespace dxvk {
-  
+
+  // How long a single vkWaitSemaphores call may block before it is retried.
+  // Drivers can lose a timeline semaphore wakeup, leaving this thread blocked
+  // on work the GPU has in fact already finished, until some later signal
+  // happens to wake it. Polling in short steps bounds what that costs.
+  // An interval of zero waits indefinitely instead.
+  static uint64_t getSemaphorePollNs(const DxvkOptions& options) {
+    int32_t ms = options.semaphorePollInterval;
+
+    // DXVK_SEMAPHORE_POLL_MS overrides the config option, the same way
+    // DXVK_HUD and DXVK_FILTER_DEVICE_NAME override theirs.
+    std::string env = env::getEnvVar("DXVK_SEMAPHORE_POLL_MS");
+
+    if (!env.empty()) {
+      char* end = nullptr;
+      unsigned long long parsed = std::strtoull(env.c_str(), &end, 10);
+
+      // Ignore values that are not a number at all, and saturate rather than
+      // wrapping on absurd ones so that a typo cannot produce a tight loop.
+      if (end != env.c_str())
+        ms = parsed > 0x7fffffffull ? 0x7fffffff : int32_t(parsed);
+    }
+
+    if (ms <= 0)
+      return ~0ull;
+
+    return uint64_t(ms) * 1'000'000ull;
+  }
+
+
   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device, const DxvkQueueCallback& callback)
   : m_device        (device),
     m_checkpoints   (device->getCheckpointBuffer()),
     m_callback      (callback),
+    m_semaphorePollNs (getSemaphorePollNs(device->config())),
     m_submitThread  ([this] () { submitCmdLists(); }),
     m_finishThread  ([this] () { finishCmdLists(); }) {
     auto vk = m_device->vkd();
@@ -273,7 +305,12 @@ namespace dxvk {
           waitInfo.pSemaphores = semaphores.data();
           waitInfo.pValues = timelines.data();
 
-          status = vk->vkWaitSemaphores(vk->device(), &waitInfo, ~0ull);
+          // Retry in short steps rather than blocking indefinitely, so that a
+          // wakeup the driver fails to deliver costs one poll interval instead
+          // of stalling this thread until the next signal happens to arrive.
+          while ((status = vk->vkWaitSemaphores(vk->device(),
+              &waitInfo, m_semaphorePollNs)) == VK_TIMEOUT)
+            continue;
 
           if (entry.latency.tracker && status == VK_SUCCESS)
             entry.latency.tracker->notifyGpuExecutionEnd(entry.latency.frameId);
