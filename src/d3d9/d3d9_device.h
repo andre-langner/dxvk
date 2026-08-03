@@ -72,6 +72,8 @@ namespace dxvk {
     Fog,
     FFVertexData,
     FFVertexBlend,
+    FFViewMatrix,
+    FFLightData,
     FFVertexShader,
     FFPixelShader,
     FFViewport,
@@ -1668,6 +1670,18 @@ namespace dxvk {
     D3D9UserDefinedAnnotation*      m_annotation = nullptr;
 
     D3D9ViewportInfo                m_viewportInfo;
+
+    // Derived fixed-function vertex state. The FFVertexData constants get
+    // rebuilt whenever any transform changes, which for fixed-function games
+    // means once per draw, but these two only depend on the view matrix and
+    // the light set. Recomputing them there would mean a 4x4 matrix inversion
+    // and two cosf() per enabled light on every draw, so cache them instead.
+    Matrix4                         m_ffInverseView = Matrix4();
+
+    std::array<
+      D3D9Light,
+      caps::MaxEnabledLights>       m_ffLights      = { };
+    uint32_t                        m_ffLightCount  = 0u;
 
     DxvkCsChunkPool                 m_csChunkPool;
     DxvkCsThread                    m_csThread;

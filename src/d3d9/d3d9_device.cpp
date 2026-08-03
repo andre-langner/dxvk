@@ -143,6 +143,8 @@ namespace dxvk {
                 D3D9DeviceDirtyFlag::Fog,
                 D3D9DeviceDirtyFlag::FFVertexData,
                 D3D9DeviceDirtyFlag::FFVertexBlend,
+                D3D9DeviceDirtyFlag::FFViewMatrix,
+                D3D9DeviceDirtyFlag::FFLightData,
                 D3D9DeviceDirtyFlag::FFPixelShader,
                 D3D9DeviceDirtyFlag::FFViewport,
                 D3D9DeviceDirtyFlag::SharedPixelShaderData,
@@ -2124,6 +2126,10 @@ namespace dxvk {
 
     m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
 
+    if (idx == GetTransformIndex(D3DTS_VIEW))
+      m_dirty.set(D3D9DeviceDirtyFlag::FFViewMatrix,
+                  D3D9DeviceDirtyFlag::FFLightData);
+
     if (idx == GetTransformIndex(D3DTS_VIEW) || idx >= GetTransformIndex(D3DTS_WORLD))
       m_dirty.set(D3D9DeviceDirtyFlag::FFVertexBlend);
 
@@ -2180,6 +2186,12 @@ namespace dxvk {
     if (unlikely(ShouldRecord()))
       return m_recorder->SetMaterial(pMaterial);
 
+    // Fixed-function engines tend to set a material per object, very often
+    // the same one. Identical bytes mean identical vertex constants, so this
+    // is always safe and skips rebuilding the whole FF vertex constant block.
+    if (!std::memcmp(&m_state.material, pMaterial, sizeof(m_state.material)))
+      return D3D_OK;
+
     m_state.material = *pMaterial;
     m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
 
@@ -2218,7 +2230,8 @@ namespace dxvk {
     light.light = *pLight;
 
     if (light.isEnabled)
-      m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
+      m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData,
+                  D3D9DeviceDirtyFlag::FFLightData);
 
     return D3D_OK;
   }
@@ -2262,7 +2275,8 @@ namespace dxvk {
     light.isValid = true;
     light.isEnabled = bool(Enable);
 
-    m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
+    m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData,
+                D3D9DeviceDirtyFlag::FFLightData);
     return D3D_OK;
   }
 
@@ -4690,9 +4704,25 @@ namespace dxvk {
     if (unlikely(ShouldRecord()))
       return m_recorder->SetStateTransform(idx, pMatrix);
 
-    m_state.transforms[idx] = ConvertMatrix(pMatrix);
+    const Matrix4 matrix = ConvertMatrix(pMatrix);
+
+    // Fixed-function games re-set the same transform between draws all the
+    // time, most often an unchanged world matrix. Rebuilding the vertex
+    // constants costs two 4x4 inversions and a full light conversion, so it
+    // is well worth 64 bytes of comparison to avoid. SetRenderState and
+    // SetTextureStageState already filter redundant sets the same way.
+    // Compare bytes rather than floats so that a matrix which only differs in
+    // the sign of a zero still round-trips through GetTransform unchanged.
+    if (!std::memcmp(&m_state.transforms[idx], &matrix, sizeof(matrix)))
+      return D3D_OK;
+
+    m_state.transforms[idx] = matrix;
 
     m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
+
+    if (idx == GetTransformIndex(D3DTS_VIEW))
+      m_dirty.set(D3D9DeviceDirtyFlag::FFViewMatrix,
+                  D3D9DeviceDirtyFlag::FFLightData);
 
     if (idx == GetTransformIndex(D3DTS_VIEW)
      || idx >= GetTransformIndex(D3DTS_WORLD))
@@ -8206,14 +8236,24 @@ namespace dxvk {
     if (m_dirty.test(D3D9DeviceDirtyFlag::FFVertexData)) {
       m_dirty.clr(D3D9DeviceDirtyFlag::FFVertexData);
 
-      auto WorldView    = m_state.transforms[GetTransformIndex(D3DTS_VIEW)] * m_state.transforms[GetTransformIndex(D3DTS_WORLD)];
+      const auto& View  = m_state.transforms[GetTransformIndex(D3DTS_VIEW)];
+
+      auto WorldView    = View * m_state.transforms[GetTransformIndex(D3DTS_WORLD)];
       auto NormalMatrix = tryInverse(WorldView).value_or(Matrix4(1.0f));
       auto Projection   = m_state.transforms[GetTransformIndex(D3DTS_PROJECTION)];
+
+      // Only depends on the view matrix, so recompute it when that changes
+      // rather than on every rebuild of these constants.
+      if (m_dirty.test(D3D9DeviceDirtyFlag::FFViewMatrix)) {
+        m_dirty.clr(D3D9DeviceDirtyFlag::FFViewMatrix);
+
+        m_ffInverseView = transpose(inverse(View));
+      }
 
       auto data = GetConstantBuffer(CbvIndex::VSFixedFunction).AllocTyped<D3D9FixedFunctionVS>(1u);
       data->WorldView    = WorldView;
       data->NormalMatrix = NormalMatrix;
-      data->InverseView  = transpose(inverse(m_state.transforms[GetTransformIndex(D3DTS_VIEW)]));
+      data->InverseView  = m_ffInverseView;
       data->Projection   = Projection;
       data->WorldViewProj = Projection * WorldView;
 
@@ -8222,22 +8262,35 @@ namespace dxvk {
 
       data->ViewportInfo = m_viewportInfo;
 
-      uint32_t lightIdx = 0;
+      // Converting a light transforms its position and direction into view
+      // space and evaluates two cosines, and none of that depends on state
+      // that changes per draw. Only redo it when the lights themselves or the
+      // view matrix change.
+      if (m_dirty.test(D3D9DeviceDirtyFlag::FFLightData)) {
+        m_dirty.clr(D3D9DeviceDirtyFlag::FFLightData);
 
-      for (auto& light : m_state.lights) {
-        if (!light.isEnabled)
-          continue;
+        uint32_t lightIdx = 0;
 
-        // D3D8/9 will allow lights with invalid types to be set and retrieved,
-        // and even enabled, however they won't affect overall lighting
-        if (unlikely(!light.light.Type || light.light.Type > D3DLIGHT_DIRECTIONAL))
-          continue;
+        for (auto& light : m_state.lights) {
+          if (!light.isEnabled)
+            continue;
 
-        data->Lights[lightIdx++] = D3D9Light(light.light, m_state.transforms[GetTransformIndex(D3DTS_VIEW)]);
+          // D3D8/9 will allow lights with invalid types to be set and retrieved,
+          // and even enabled, however they won't affect overall lighting
+          if (unlikely(!light.light.Type || light.light.Type > D3DLIGHT_DIRECTIONAL))
+            continue;
 
-        if (lightIdx == caps::MaxEnabledLights)
-          break;
+          m_ffLights[lightIdx++] = D3D9Light(light.light, View);
+
+          if (lightIdx == caps::MaxEnabledLights)
+            break;
+        }
+
+        m_ffLightCount = lightIdx;
       }
+
+      for (uint32_t i = 0; i < m_ffLightCount; i++)
+        data->Lights[i] = m_ffLights[i];
 
       data->Material = m_state.material;
       data->GlobalAmbient = m_state.renderStates[D3DRS_AMBIENT];
@@ -8268,8 +8321,7 @@ namespace dxvk {
       data->SpecularSource   = m_state.renderStates[D3DRS_SPECULARMATERIALSOURCE] & mask;
       data->EmissiveSource   = m_state.renderStates[D3DRS_EMISSIVEMATERIALSOURCE] & mask;
 
-      uint32_t lightCount = lightIdx;
-      data->LightCount       = lighting ? lightCount : 0;
+      data->LightCount       = lighting ? m_ffLightCount : 0;
 
       for (uint32_t i = 0; i < caps::MaxTextureBlendStages; i++) {
         uint32_t transformFlags = m_state.textureStages[i][DXVK_TSS_TEXTURETRANSFORMFLAGS] & ~(D3DTTFF_PROJECTED);
@@ -8750,7 +8802,12 @@ namespace dxvk {
     rs[D3DRS_LOCALVIEWER]            = TRUE;
     rs[D3DRS_RANGEFOGENABLE]         = FALSE;
     rs[D3DRS_NORMALIZENORMALS]       = FALSE;
-    m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData);
+    // Rebuild the cached view matrix inverse and light set unconditionally
+    // here so they cannot go stale if this ever starts resetting lights or
+    // transforms as well.
+    m_dirty.set(D3D9DeviceDirtyFlag::FFVertexData,
+                D3D9DeviceDirtyFlag::FFViewMatrix,
+                D3D9DeviceDirtyFlag::FFLightData);
 
     // PS
     rs[D3DRS_SPECULARENABLE] = FALSE;
