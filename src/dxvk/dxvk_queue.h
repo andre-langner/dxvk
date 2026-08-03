@@ -200,6 +200,8 @@ namespace dxvk {
     DxvkCheckpointBuffer*       m_checkpoints = nullptr;
     DxvkQueueCallback           m_callback;
 
+    uint64_t                    m_semaphorePollNs = 0ull;
+
     DxvkTimelineSemaphores      m_semaphores;
     DxvkTimelineSemaphoreValues m_timelines;
 
