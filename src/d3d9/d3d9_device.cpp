@@ -474,6 +474,40 @@ namespace dxvk {
 
 
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::Reset(D3DPRESENT_PARAMETERS* pPresentationParameters) {
+    // Swapchain recreation throws on failure, and games commonly call Reset
+    // from inside their window procedure in response to WM_SIZE. Letting a C++
+    // exception unwind out of here would cross a kernel callback boundary and
+    // take the process down with STATUS_FATAL_USER_CALLBACK_EXCEPTION rather
+    // than surfacing as an error, so stop everything at the COM boundary.
+    try {
+      return ResetInternal(pPresentationParameters);
+    }
+    catch (const DxvkError& e) {
+      Logger::err(str::format("D3D9: Reset failed: ", e.message()));
+      return HandleResetException();
+    }
+    catch (...) {
+      Logger::err("D3D9: Reset failed: unknown exception");
+      return HandleResetException();
+    }
+  }
+
+
+  HRESULT D3D9DeviceEx::HandleResetException() {
+    // Reset tears down the back buffers before recreating the swapchain, so a
+    // throw partway through leaves the device unusable. Put it in the same
+    // not-reset state the ordinary failure path uses, otherwise the device
+    // still reports Ok and the game renders into a half-destroyed swapchain.
+    if (!m_d3dCompatibility.test(D3DCompatibility::D3D9Ex)) {
+      D3D9DeviceLock lock = LockDevice();
+      m_deviceLostState = D3D9DeviceLostState::NotReset;
+    }
+
+    return D3DERR_DEVICELOST;
+  }
+
+
+  HRESULT D3D9DeviceEx::ResetInternal(D3DPRESENT_PARAMETERS* pPresentationParameters) {
     D3D9DeviceLock lock = LockDevice();
 
     // A Vulkan device loss is not recoverable, so this device
@@ -4530,6 +4564,24 @@ namespace dxvk {
 
 
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::ResetEx(
+          D3DPRESENT_PARAMETERS* pPresentationParameters,
+          D3DDISPLAYMODEEX*      pFullscreenDisplayMode) {
+    // See the comment in Reset: nothing may unwind past this boundary.
+    try {
+      return ResetExInternal(pPresentationParameters, pFullscreenDisplayMode);
+    }
+    catch (const DxvkError& e) {
+      Logger::err(str::format("D3D9: ResetEx failed: ", e.message()));
+      return HandleResetException();
+    }
+    catch (...) {
+      Logger::err("D3D9: ResetEx failed: unknown exception");
+      return HandleResetException();
+    }
+  }
+
+
+  HRESULT D3D9DeviceEx::ResetExInternal(
           D3DPRESENT_PARAMETERS* pPresentationParameters,
           D3DDISPLAYMODEEX*      pFullscreenDisplayMode) {
     D3D9DeviceLock lock = LockDevice();

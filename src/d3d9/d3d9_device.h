@@ -1105,6 +1105,16 @@ namespace dxvk {
     void ResetState(D3DPRESENT_PARAMETERS* pPresentationParameters);
     HRESULT ResetSwapChain(D3DPRESENT_PARAMETERS* pPresentationParameters, D3DDISPLAYMODEEX* pFullscreenDisplayMode);
 
+    // Bodies of Reset and ResetEx. The public entry points are thin wrappers
+    // that stop any exception from escaping into the caller, so these are free
+    // to let a DxvkError propagate out of swapchain recreation.
+    HRESULT ResetInternal(D3DPRESENT_PARAMETERS* pPresentationParameters);
+    HRESULT ResetExInternal(
+            D3DPRESENT_PARAMETERS* pPresentationParameters,
+            D3DDISPLAYMODEEX*      pFullscreenDisplayMode);
+
+    HRESULT HandleResetException();
+
     HRESULT InitialReset(D3DPRESENT_PARAMETERS* pPresentationParameters, D3DDISPLAYMODEEX* pFullscreenDisplayMode);
 
     /**
